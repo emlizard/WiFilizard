@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi 시뮬레이터 (경계선 분할 그리기 & 보정 개선)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #controls { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 10px; }
+    canvas { border: 1px solid #ccc; display: block; margin: auto; }
+    #colorbar { margin-top: 10px; text-align: center; }
+    #progressContainer { width: 100%; background: #ddd; border: 1px solid #ccc; margin-top: 10px; height: 20px; }
+    #progressBar { width: 0%; height: 100%; background: green; transition: width 0.1s; }
+    #progressText { margin-top: 5px; text-align: center; }
+    #scaleControls { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .legend { display: flex; align-items: center; justify-content: center; margin-top: 10px; }
+    .legend-item { display: flex; align-items: center; margin-right: 15px; }
+    .legend-color { width: 20px; height: 20px; margin-right: 5px; }
+    #instructions { margin-top: 15px; padding: 10px; background-color: #f0f0f0; border-radius: 5px; }
+    #clearBoundary { display: none; }
+  </style>
+</head>
+<body>
+  <h2>WiFi 시뮬레이터</h2>
+  <div id="controls">
+    <input type="file" id="floorPlanInput" accept="image/*">
+    <button id="startCalibration" disabled>보정 모드 시작</button>
+    <button id="completeCalibration" style="display:none;">보정 완료</button>
+    <span id="calibrationInstruction">보정 모드가 아닙니다.</span>
+    <br>
+    <button id="startRouterPlacement" disabled>공유기 위치 설정 시작</button>
+    <button id="completeRouterPlacement" style="display:none;">설정 완료</button>
+    <br>
+    <button id="startBoundaryDraw" disabled>경계선 그리기 시작</button>
+    <button id="completeBoundaryDraw" style="display:none;">경계선 그리기 종료</button>
+    <button id="clearBoundary">마지막 경계선 지우기</button>
+    <button id="resetDataBtn">데이터 리셋</button>
+    <br>
+    <label><input type="checkbox" id="visualizeSteps"> 단계 시각화</label>
+    <button id="startSimulation" disabled>시뮬레이션 시작</button>
+    <button id="toggleWalls" disabled>벽 경계 표시</button>
+    <div id="progressContainer"><div id="progressBar"></div></div>
+    <div id="progressText">진행률: 0%</div>
+    <button id="downloadCSV" disabled>결과 CSV 다운로드</button>
+    <div id="scaleControls">
+      <label>최소 스케일 (dBm):</label><input type="number" id="scaleMin" value="-100" style="width:80px;">
+      <label>최대 스케일 (dBm):</label><input type="number" id="scaleMax" value="-50" style="width:80px;">
+      <button id="updateScale" disabled>스케일 업데이트</button>
+    </div>
+  </div>
+  <canvas id="floorPlanCanvas" width="800" height="600"></canvas>
+  <div id="colorbar">
+    <h4>신호 강도 칼라바 (10단계)</h4>
+    <div style="width:300px; height:20px; margin:auto; background: linear-gradient(to right, blue, cyan, green, yellow, red);"></div>
+    <div style="display:flex; justify-content:space-between; width:300px; margin:auto;"><span id="barMinLabel">-100 dBm</span><span id="barMidLabel">-75 dBm</span><span id="barMaxLabel">-50 dBm</span></div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background-color: red;"></div>공유기</div>
+    <div class="legend-item"><div class="legend-color" style="background-color: blue;"></div>보정 지점</div>
+    <div class="legend-item"><div class="legend-color" style="border: 2px solid yellow; width: 16px; height: 16px;"></div>벽 경계</div>
+  </div>
+  <div id="instructions">
+    <h3>사용 방법</h3>
+    <ol>
+      <li>평면도 이미지를 업로드하세요.</li>
+      <li>보정 모드를 시작하여 실제 거리를 알고 있는 두 지점을 클릭한 후 실제 거리(m)를 입력하세요.</li>
+      <li>공유기 위치 설정 모드에서 공유기를 배치할 위치를 클릭하세요.</li>
+      <li>경계선 그리기 모드에서 벽과 같은 장애물의 경계선을 그리세요 (시작점 클릭 → 종료점 클릭).</li>
+      <li>시뮬레이션 시작 버튼을 눌러 WiFi 신호 강도를 시뮬레이션하세요.</li>
+      <li>시뮬레이션 결과를 CSV 파일로 다운로드할 수 있습니다.</li>
+    </ol>
+  </div>
+  <script>
+    const canvas = document.getElementById('floorPlanCanvas');
+    const ctx = canvas.getContext('2d');
+    let img = new Image();
+    let scale = 1;
+    let calibPts = [];
+    let mode = 'none';
+    let routerPositions = [];
+    let autoWalls = [];
+    let manualWalls = []; // array of segments {start:{x,y}, end:{x,y}}
+    let tempStart = null;
+    let showWalls = false;
+    let globalGrid = [];
+    let signalStrengthData = [];
+    let simulationComplete = false;
+    let minScale = -100;
+    let maxScale = -50;
+    const gridSpacing = 10;
+    
+    // WiFi 신호 모델 상수
+    const FSPL_CONST = 20; // Free Space Path Loss constant
+    const REFERENCE_DISTANCE = 1; // 1 meter
+    const WALL_LOSS = 20; // dB per wall (벽 당 손실)
+    const TX_POWER = 20; // dBm (공유기 송신 출력)
+    const FREQUENCY = 2.4; // GHz
+    
+    // UI
+    const startCalBtn = document.getElementById('startCalibration');
+    const completeCalBtn = document.getElementById('completeCalibration');
+    const calInstr = document.getElementById('calibrationInstruction');
+    const startRouterBtn = document.getElementById('startRouterPlacement');
+    const completeRouterBtn = document.getElementById('completeRouterPlacement');
+    const startBoundaryBtn = document.getElementById('startBoundaryDraw');
+    const completeBoundaryBtn = document.getElementById('completeBoundaryDraw');
+    const clearBoundaryBtn = document.getElementById('clearBoundary');
+    const startSimBtn = document.getElementById('startSimulation');
+    const toggleWallsBtn = document.getElementById('toggleWalls');
+    const downloadCSVBtn = document.getElementById('downloadCSV');
+    const updateScaleBtn = document.getElementById('updateScale');
+    const visualizeStepsCheck = document.getElementById('visualizeSteps');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const barMinLabel = document.getElementById('barMinLabel');
+    const barMidLabel = document.getElementById('barMidLabel');
+    const barMaxLabel = document.getElementById('barMaxLabel');
+
+    // Load
+    document.getElementById('floorPlanInput').addEventListener('change', e => {
+      const reader = new FileReader(); 
+      reader.onload = ev => {
+        img.onload = () => { 
+          canvas.width = img.width; 
+          canvas.height = img.height;
+          detectAutoWalls(); 
+          draw(); 
+          enableInitial(); 
+        };
+        img.src = ev.target.result; 
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    });
+
+// --- Data Reset Function ---
+	// --- Data Reset Function ---
+    function resetData() {
+      calibPts = [];
+      routerPositions = [];
+      manualWalls = [];
+      signalStrengthData = [];
+      simulationComplete = false;
+      showWalls = false;
+
+  // UI 초기화
+      progressBar.style.width  = '0%';
+      progressText.textContent  = '진행률: 0%';
+      downloadCSVBtn.disabled   = true;
+      updateScaleBtn.disabled   = true;
+      clearBoundaryBtn.style.display      = 'none';
+      completeCalBtn.style.display        = 'none';
+      completeRouterBtn.style.display     = 'none';
+      completeBoundaryBtn.style.display   = 'none';
+      calInstr.textContent                = '보정 모드가 아닙니다.';
+
+      detectAutoWalls();
+      draw();
+    }
+
+// 버튼 클릭 시 리셋
+    document.getElementById('resetDataBtn').addEventListener('click', () => {
+       if (confirm('정말로 모든 설정 및 결과를 초기화하시겠습니까?')) {
+        resetData();
+      }
+    });
+
+
+
+
+    function enableInitial() {
+      startCalBtn.disabled = false;
+      startRouterBtn.disabled = false;
+      startBoundaryBtn.disabled = false;
+      toggleWallsBtn.disabled = false;
+      startSimBtn.disabled = false;
+    }
+
+    // Auto wall detection simple
+    function detectAutoWalls() {
+      autoWalls = [
+        {start:{x:0,y:0}, end:{x:canvas.width,y:0}},
+        {start:{x:0,y:canvas.height}, end:{x:canvas.width,y:canvas.height}},
+        {start:{x:0,y:0}, end:{x:0,y:canvas.height}},
+        {start:{x:canvas.width,y:0}, end:{x:canvas.width,y:canvas.height}}
+      ];
+    }
+
+    // Draw everything
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw heatmap if simulation is complete
+      if (simulationComplete && signalStrengthData.length > 0) {
+        drawHeatmap();
+      } else {
+        ctx.drawImage(img, 0, 0);
+      }
+      
+      // Draw walls
+      if (showWalls) {
+        const allWalls = autoWalls.concat(manualWalls);
+        allWalls.forEach(seg => {
+          ctx.beginPath(); 
+          ctx.setLineDash([5, 5]); 
+          ctx.strokeStyle = 'yellow'; 
+          ctx.lineWidth = 2;
+          ctx.moveTo(seg.start.x, seg.start.y); 
+          ctx.lineTo(seg.end.x, seg.end.y); 
+          ctx.stroke(); 
+          ctx.setLineDash([]);
+        });
+      }
+      
+      // Draw routers
+      routerPositions.forEach(r => {
+        ctx.beginPath(); 
+        ctx.arc(r.x, r.y, 5, 0, 2 * Math.PI); 
+        ctx.fillStyle = 'red'; 
+        ctx.fill();
+      });
+      
+      // Draw calibration points
+      if (mode === 'calibration') {
+        calibPts.forEach(p => {
+          ctx.beginPath(); 
+          ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI); 
+          ctx.fillStyle = 'blue'; 
+          ctx.fill();
+        });
+      }
+      
+      // Drawing boundary in progress
+      if (mode === 'boundary' && tempStart) {
+        ctx.beginPath(); 
+        ctx.strokeStyle = 'lime'; 
+        ctx.lineWidth = 2;
+        ctx.moveTo(tempStart.x, tempStart.y); 
+        ctx.lineTo(lastMouse.x, lastMouse.y); 
+        ctx.stroke();
+      }
+    }
+
+    // Canvas clicks
+    let lastMouse = {x: 0, y: 0};
+    canvas.addEventListener('mousemove', e => {
+      const r = canvas.getBoundingClientRect(); 
+      lastMouse = {
+        x: e.clientX - r.left,
+        y: e.clientY - r.top
+      }; 
+      if (mode === 'boundary') draw();
+    });
+    
+    canvas.addEventListener('click', e => {
+      const r = canvas.getBoundingClientRect(); 
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      
+      if (mode === 'calibration') {
+        if (calibPts.length < 2) {
+          calibPts.push({x, y}); 
+          draw();
+        }
+      } else if (mode === 'router') {
+        routerPositions.push({x, y}); 
+        draw();
+      } else if (mode === 'boundary') {
+        if (!tempStart) {
+          tempStart = {x, y};
+          clearBoundaryBtn.style.display = 'none';
+        } else {
+          manualWalls.push({start: tempStart, end: {x, y}}); 
+          tempStart = null; 
+          clearBoundaryBtn.style.display = 'inline';
+          draw();
+        }
+      }
+    });
+
+    // Calibration
+    startCalBtn.addEventListener('click', () => {
+      mode = 'calibration'; 
+      calibPts = []; 
+      calInstr.textContent = '두 점 클릭 후 보정 완료 클릭';
+      completeCalBtn.style.display = 'inline'; 
+      startCalBtn.disabled = true; 
+      startRouterBtn.disabled = true; 
+      startSimBtn.disabled = true;
+    });
+    
+    completeCalBtn.addEventListener('click', () => {
+      if (calibPts.length < 2) {
+        alert('두 점 선택 필요');
+        return;
+      } 
+      const dpx = Math.hypot(calibPts[0].x - calibPts[1].x, calibPts[0].y - calibPts[1].y);
+      const real = prompt('실제 거리(m)를 입력'); 
+      const realNum = parseFloat(real);
+      
+      if (isNaN(realNum) || realNum <= 0) {
+        alert('올바른 거리를 입력하세요');
+        return;
+      } 
+      
+      scale = realNum / dpx;
+      alert(`보정됨 1px = ${scale.toFixed(3)}m`);
+      mode = 'none'; 
+      completeCalBtn.style.display = 'none'; 
+      calInstr.textContent = '보정 모드 아님'; 
+      startCalBtn.disabled = false; 
+      startRouterBtn.disabled = false; 
+      startSimBtn.disabled = false; 
+      draw();
+    });
+
+    // Router placement
+    startRouterBtn.addEventListener('click', () => {
+      mode = 'router'; 
+      routerPositions = []; 
+      completeRouterBtn.style.display = 'inline'; 
+      startCalBtn.disabled = true; 
+      startRouterBtn.disabled = true; 
+      startSimBtn.disabled = true;
+    });
+    
+    completeRouterBtn.addEventListener('click', () => {
+      mode = 'none'; 
+      completeRouterBtn.style.display = 'none'; 
+      startCalBtn.disabled = false; 
+      startRouterBtn.disabled = false; 
+      startSimBtn.disabled = false; 
+      draw();
+    });
+
+    // Boundary draw
+    startBoundaryBtn.addEventListener('click', () => {
+      mode = 'boundary';
+      if (manualWalls.length > 0) {
+        if (!confirm('기존 경계선을 모두 지우고 새로 그리겠습니까?')) {
+          return;
+        }
+      }
+      manualWalls = []; 
+      tempStart = null; 
+      completeBoundaryBtn.style.display = 'inline'; 
+      startCalBtn.disabled = true; 
+      startRouterBtn.disabled = true; 
+      startBoundaryBtn.disabled = true; 
+      startSimBtn.disabled = true;
+      clearBoundaryBtn.style.display = 'none';
+    });
+    
+    completeBoundaryBtn.addEventListener('click', () => {
+      mode = 'none'; 
+      tempStart = null;
+      completeBoundaryBtn.style.display = 'none'; 
+      clearBoundaryBtn.style.display = 'none';
+      startCalBtn.disabled = false; 
+      startRouterBtn.disabled = false; 
+      startBoundaryBtn.disabled = false; 
+      startSimBtn.disabled = false; 
+      draw();
+    });
+    
+    clearBoundaryBtn.addEventListener('click', () => {
+      if (manualWalls.length > 0) {
+        manualWalls.pop();
+        draw();
+      }
+      if (manualWalls.length === 0) {
+        clearBoundaryBtn.style.display = 'none';
+      }
+    });
+
+    // Toggle walls
+    toggleWallsBtn.addEventListener('click', () => {
+      showWalls = !showWalls; 
+      draw();
+    });
+
+    // Check if line segments intersect
+    function linesIntersect(line1, line2) {
+      const x1 = line1.start.x, y1 = line1.start.y;
+      const x2 = line1.end.x, y2 = line1.end.y;
+      const x3 = line2.start.x, y3 = line2.start.y;
+      const x4 = line2.end.x, y4 = line2.end.y;
+      
+      // Calculate determinants
+      const den = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+      if (den === 0) return false;
+      
+      const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / den;
+      const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / den;
+      
+      // Check if intersection point is within both line segments
+      return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
+    }
+
+    // Count wall intersections between two points
+    function countWallIntersections(p1, p2) {
+      const line = {start: p1, end: p2};
+      const allWalls = autoWalls.concat(manualWalls);
+      let count = 0;
+      
+      for (let wall of allWalls) {
+        if (linesIntersect(line, wall)) {
+          count++;
+        }
+      }
+      
+      return count;
+    }
+
+    // Calculate signal strength at a point
+    function calculateSignalStrength(point, router) {
+      // Convert pixel distance to meters
+      const pixelDist = Math.hypot(point.x - router.x, point.y - router.y);
+      const distance = pixelDist * scale;
+      
+      // Use Log-distance path loss model with wall attenuation
+      let signalStrength = TX_POWER - (FSPL_CONST * Math.log10(distance / REFERENCE_DISTANCE) + 20 * Math.log10(FREQUENCY));
+      
+      // Count walls between router and point and add attenuation
+      const wallsCount = countWallIntersections(point, router);
+      signalStrength -= wallsCount * WALL_LOSS;
+      
+      return signalStrength;
+    }
+
+    // Combined signal strength from all routers (dBm to mW, sum, then back to dBm)
+    function combinedSignalStrength(point) {
+      if (routerPositions.length === 0) return -100; // No routers
+      
+      // Convert all dBm values to mW, sum them, then convert back to dBm
+      let totalPower_mW = 0;
+      
+      for (let router of routerPositions) {
+        const signalStrength_dBm = calculateSignalStrength(point, router);
+        const power_mW = Math.pow(10, signalStrength_dBm / 10);
+        totalPower_mW += power_mW;
+      }
+      
+      // Convert back to dBm
+      return 10 * Math.log10(totalPower_mW);
+    }
+    
+    // Get color from signal strength
+    function getColorFromSignal(signal) {
+      // Normalize signal strength between 0 and 1
+      const normalized = (signal - minScale) / (maxScale - minScale);
+      const clampedNorm = Math.max(0, Math.min(normalized, 1));
+      
+      // Color gradient blue -> cyan -> green -> yellow -> red
+      let r, g, b;
+      
+      if (clampedNorm < 0.25) {
+        // Blue to cyan
+        const t = clampedNorm * 4;
+        r = 0;
+        g = Math.floor(t * 255);
+        b = 255;
+      } else if (clampedNorm < 0.5) {
+        // Cyan to green
+        const t = (clampedNorm - 0.25) * 4;
+        r = 0;
+        g = 255;
+        b = Math.floor(255 * (1 - t));
+      } else if (clampedNorm < 0.75) {
+        // Green to yellow
+        const t = (clampedNorm - 0.5) * 4;
+        r = Math.floor(t * 255);
+        g = 255;
+        b = 0;
+      } else {
+        // Yellow to red
+        const t = (clampedNorm - 0.75) * 4;
+        r = 255;
+        g = Math.floor(255 * (1 - t));
+        b = 0;
+      }
+      
+      return `rgba(${r}, ${g}, ${b}, 0.7)`;
+    }
+
+    // Draw heatmap
+    function drawHeatmap() {
+      // First draw the original image with reduced opacity
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(img, 0, 0);
+      ctx.globalAlpha = 1.0;
+      
+      // Draw the heatmap
+      for (let data of signalStrengthData) {
+        const color = getColorFromSignal(data.signal);
+        ctx.fillStyle = color;
+        ctx.fillRect(data.x, data.y, gridSpacing, gridSpacing);
+      }
+    }
+
+    // Start simulation
+    startSimBtn.addEventListener('click', () => {
+      if (routerPositions.length === 0) {
+        alert('최소한 하나의 공유기 위치를 설정하세요.');
+        return;
+      }
+      
+      // Disable buttons during simulation
+      startCalBtn.disabled = true;
+      startRouterBtn.disabled = true;
+      startBoundaryBtn.disabled = true;
+      startSimBtn.disabled = true;
+      toggleWallsBtn.disabled = true;
+      
+      // Reset data
+      signalStrengthData = [];
+      simulationComplete = false;
+      
+      // Create grid points
+      const numX = Math.ceil(canvas.width / gridSpacing);
+      const numY = Math.ceil(canvas.height / gridSpacing);
+      const totalPoints = numX * numY;
+      let processedPoints = 0;
+      
+      // Show progress
+      progressBar.style.width = '0%';
+      progressText.textContent = '진행률: 0%';
+      
+      // Process grid in batches for better UI responsiveness
+      function processBatch(startX, startY, batchSize) {
+        let count = 0;
+        let x = startX, y = startY;
+        
+        while (count < batchSize && processedPoints < totalPoints) {
+          // Calculate signal strength at this grid point
+          const point = {x: x * gridSpacing, y: y * gridSpacing};
+          const signal = combinedSignalStrength(point);
+          
+          // Store data
+          signalStrengthData.push({
+            x: point.x,
+            y: point.y,
+            signal: signal
+          });
+          
+          // Increment counters
+          count++;
+          processedPoints++;
+          
+          // Update progress
+          const percentage = Math.floor((processedPoints / totalPoints) * 100);
+          progressBar.style.width = percentage + '%';
+          progressText.textContent = `진행률: ${percentage}%`;
+          
+          // Visual feedback if checked
+          if (visualizeStepsCheck.checked && count % 10 === 0) {
+            draw();
+          }
+          
+          // Move to next grid point
+          x++;
+          if (x >= numX) {
+            x = 0;
+            y++;
+          }
+        }
+        
+        // Continue processing or finish
+        if (processedPoints < totalPoints) {
+          setTimeout(() => processBatch(x, y, batchSize), 0);
+        } else {
+          // Simulation complete
+          simulationComplete = true;
+          
+          // Enable buttons
+          startCalBtn.disabled = false;
+          startRouterBtn.disabled = false;
+          startBoundaryBtn.disabled = false;
+          startSimBtn.disabled = false;
+          toggleWallsBtn.disabled = false;
+          downloadCSVBtn.disabled = false;
+          updateScaleBtn.disabled = false;
+          
+          draw();
+        }
+      }
+      
+      // Start processing
+      processBatch(0, 0, 100);
+    });
+
+    // Update scale
+    updateScaleBtn.addEventListener('click', () => {
+      const newMin = parseFloat(document.getElementById('scaleMin').value);
+      const newMax = parseFloat(document.getElementById('scaleMax').value);
+      
+      if (isNaN(newMin) || isNaN(newMax) || newMin >= newMax) {
+        alert('올바른 스케일 값을 입력하세요');
+        return;
+      }
+      
+      minScale = newMin;
+      maxScale = newMax;
+      
+      // Update scale labels
+      barMinLabel.textContent = `${minScale} dBm`;
+      barMidLabel.textContent = `${((minScale + maxScale) / 2).toFixed(0)} dBm`;
+      barMaxLabel.textContent = `${maxScale} dBm`;
+      
+      // Redraw if simulation has been run
+      if (simulationComplete) {
+        draw();
+      }
+    });
+    
+    // Download CSV
+    downloadCSVBtn.addEventListener('click', () => {
+      if (!simulationComplete || signalStrengthData.length === 0) {
+        alert('시뮬레이션을 먼저 실행하세요');
+        return;
+      }
+      
+      // Create CSV content
+      let csvContent = 'X,Y,Signal_Strength_dBm\n';
+      
+      signalStrengthData.forEach(data => {
+        csvContent += `${data.x},${data.y},${data.signal.toFixed(2)}\n`;
+      });
+      
+      // Create blob and download
+      const blob = new Blob([csvContent], {type: 'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'wifi_signal_data.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Initialize UI
+    barMinLabel.textContent = `${minScale} dBm`;
+    barMidLabel.textContent = `${((minScale + maxScale) / 2).toFixed(0)} dBm`;
+    barMaxLabel.textContent = `${maxScale} dBm`;
+
+// --- 클릭 지점 데이터 표시 ---
+    canvas.addEventListener('click', e => {
+      if (!simulationComplete) return;  // 시뮬레이션 후에만 동작
+
+      const rect = canvas.getBoundingClientRect();
+  // 그리드 좌표(픽셀)를 gridSpacing 단위로 스냅
+      const clickedX = Math.floor((e.clientX - rect.left) / gridSpacing) * gridSpacing;
+      const clickedY = Math.floor((e.clientY - rect.top) / gridSpacing) * gridSpacing;
+
+  // 해당 좌표의 데이터 찾기
+      const datum = signalStrengthData.find(d => d.x === clickedX && d.y === clickedY);
+      if (!datum) return;
+
+  // 전체 재그리기 (히트맵 + 요소들)
+      draw();
+
+  // 마커 그리기
+      const cx = clickedX + gridSpacing / 2;
+      const cy = clickedY + gridSpacing / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, gridSpacing, 0, 2 * Math.PI);
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+  // 텍스트 표시
+      ctx.fillStyle = 'black';
+      ctx.font = '12px Arial';
+      ctx.fillText(`${datum.signal.toFixed(2)} dBm`, cx + 5, cy - 5);
+    });
+
+
+
+  </script>
+</body>
+</html>
