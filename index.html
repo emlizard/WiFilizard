@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WiFi Simulator (Boundary Drawing & Calibration)</title>
   <style>
@@ -76,30 +76,42 @@
     #clearBoundary {
       display: none;
     }
+    label, input {
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <h2>WiFi Simulator</h2>
   <div id="controls">
     <input type="file" id="floorPlanInput" accept="image/*">
+
     <button id="startCalibration" disabled>1. Start Calibration</button>
     <button id="completeCalibration" style="display:none;">Complete Calibration</button>
     <span id="calibrationInstruction">Not in calibration mode.</span>
     <br>
+
     <button id="startRouterPlacement" disabled>2. Start Router Placement</button>
     <button id="completeRouterPlacement" style="display:none;">Complete Placement</button>
     <br>
+
     <button id="startBoundaryDraw" disabled>3. Start Drawing Boundaries</button>
     <button id="completeBoundaryDraw" style="display:none;">Finish Drawing</button>
     <button id="clearBoundary">Undo Last Boundary</button>
     <button id="resetDataBtn">Reset Data</button>
     <br>
+
     <button id="startSimulation" disabled>4. Start Simulation</button>
     <button id="downloadCSV" disabled>Download CSV</button>
-    <div id="progressContainer">
-      <div id="progressBar"></div>
+    <br>
+
+    <div>
+      <label>Wall Attenuation (dB per wall):</label>
+      <input type="number" id="wallLoss" value="20" style="width:60px;">
     </div>
+    <div id="progressContainer"><div id="progressBar"></div></div>
     <div id="progressText">Progress: 0%</div>
+
     <div id="scaleControls">
       <label>Min Scale (dBm): <input type="number" id="scaleMin" value="-100" style="width:80px;"></label>
       <label>Max Scale (dBm): <input type="number" id="scaleMax" value="-50" style="width:80px;"></label>
@@ -154,19 +166,12 @@
     let autoWalls = [];
     let manualWalls = [];
     let tempStart = null;
-    let showWalls = true; // Always show walls by default
+    let showWalls = true; // Always show walls
     let signalStrengthData = [];
     let simulationComplete = false;
     let minScale = -100;
     let maxScale = -50;
     const gridSpacing = 10;
-
-    // WiFi model constants
-    const FSPL_CONST = 20; // Free Space Path Loss constant
-    const REFERENCE_DISTANCE = 1; // 1 meter
-    const WALL_LOSS = 20; // dB per wall
-    const TX_POWER = 20; // dBm
-    const FREQUENCY = 2.4; // GHz
 
     // UI elements
     const startCalBtn = document.getElementById('startCalibration');
@@ -180,13 +185,14 @@
     const startSimBtn = document.getElementById('startSimulation');
     const downloadCSVBtn = document.getElementById('downloadCSV');
     const updateScaleBtn = document.getElementById('updateScale');
+    const wallLossInput = document.getElementById('wallLoss');
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
     const barMinLabel = document.getElementById('barMinLabel');
     const barMidLabel = document.getElementById('barMidLabel');
     const barMaxLabel = document.getElementById('barMaxLabel');
 
-    // Load floor plan image
+    // Load floor plan
     document.getElementById('floorPlanInput').addEventListener('change', e => {
       const reader = new FileReader();
       reader.onload = ev => {
@@ -202,7 +208,6 @@
       reader.readAsDataURL(e.target.files[0]);
     });
 
-    // Reset all data
     function resetData() {
       calibPts = [];
       routerPositions = [];
@@ -455,9 +460,10 @@
     function calculateSignalStrength(point, router) {
       const pixelDist = Math.hypot(point.x - router.x, point.y - router.y);
       const distance = pixelDist * scale;
+      const wallLoss = parseFloat(wallLossInput.value) || 0;
       let signalStrength = TX_POWER - (FSPL_CONST * Math.log10(distance / REFERENCE_DISTANCE) + 20 * Math.log10(FREQUENCY));
       const wallsCount = countWallIntersections(point, router);
-      signalStrength -= wallsCount * WALL_LOSS;
+      signalStrength -= wallsCount * wallLoss;
       return signalStrength;
     }
 
