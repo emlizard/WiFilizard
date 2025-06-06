@@ -1,77 +1,615 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>WiFi Simulator</title>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi Simulator (Boundary Drawing & Calibration)</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    canvas { border: 1px solid #ccc; display: block; margin: auto; }
-    h2 { text-align: center; }
-    #controls, #instructions, #colorbar, .legend {
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    #controls {
+      margin-bottom: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      display: block;
+      margin: auto;
+    }
+    #colorbar {
+      margin-top: 10px;
+      text-align: center;
+    }
+    #progressContainer {
+      width: 100%;
+      background: #ddd;
+      border: 1px solid #ccc;
+      margin-top: 10px;
+      height: 20px;
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background: green;
+      transition: width 0.1s;
+    }
+    #progressText {
+      margin-top: 5px;
+      text-align: center;
+    }
+    #scaleControls {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .legend {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 10px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-right: 15px;
+    }
+    .legend-color {
+      width: 20px;
+      height: 20px;
+      margin-right: 5px;
+    }
+    #instructions {
       margin-top: 15px;
       padding: 10px;
-      background-color: #f9f9f9;
+      background-color: #f0f0f0;
       border-radius: 5px;
     }
-    #controls button, #controls input, #controls select {
-      margin: 5px;
+    #clearBoundary {
+      display: none;
     }
-    .legend { display: flex; gap: 20px; justify-content: center; }
-    .legend-item { display: flex; align-items: center; gap: 5px; }
-    .legend-color {
-      width: 20px; height: 20px;
-      border: 1px solid #000;
-    }
-    ol { padding-left: 20px; }
   </style>
 </head>
 <body>
   <h2>WiFi Simulator</h2>
   <div id="controls">
     <input type="file" id="floorPlanInput" accept="image/*">
-    <button id="startCalibration">1. Start Calibration</button>
+    <button id="startCalibration" disabled>1. Start Calibration</button>
     <button id="completeCalibration" style="display:none;">Complete Calibration</button>
-    <span id="calibrationInstruction">Not in calibration mode.</span><br>
-    <button id="startRouterPlacement">2. Start Router Placement</button>
-    <button id="completeRouterPlacement" style="display:none;">Complete Placement</button><br>
-    <button id="startBoundaryDraw">3. Start Drawing Boundaries</button>
-    <button id="completeBoundaryDraw" style="display:none;">Finish Drawing</button>
-    <button id="clearBoundary" style="display:none;">Undo Last Boundary</button><br>
-    <button id="startSimulation">4. Start Simulation</button>
-    <button id="resetDataBtn">Reset</button>
-    <button id="downloadCSV">Download CSV</button>
+    <span id="calibrationInstruction">Not in calibration mode.</span>
     <br>
-    <label>Scale Min (dBm): <input type="number" id="scaleMin" value="-100" style="width:80px;"></label>
-    <label>Scale Max (dBm): <input type="number" id="scaleMax" value="-50" style="width:80px;"></label>
-    <button id="updateScale">Update Scale</button>
+    <button id="startRouterPlacement" disabled>2. Start Router Placement</button>
+    <button id="completeRouterPlacement" style="display:none;">Complete Placement</button>
+    <br>
+    <button id="startBoundaryDraw" disabled>3. Start Drawing Boundaries</button>
+    <button id="completeBoundaryDraw" style="display:none;">Finish Drawing</button>
+    <button id="clearBoundary">Undo Last Boundary</button>
+    <button id="resetDataBtn">Reset Data</button>
+    <br>
+    <button id="startSimulation" disabled>4. Start Simulation</button>
+    <button id="downloadCSV" disabled>Download CSV</button>
+    <div id="progressContainer">
+      <div id="progressBar"></div>
+    </div>
+    <div id="progressText">Progress: 0%</div>
+    <div id="scaleControls">
+      <label>Min Scale (dBm): <input type="number" id="scaleMin" value="-100" style="width:80px;"></label>
+      <label>Max Scale (dBm): <input type="number" id="scaleMax" value="-50" style="width:80px;"></label>
+      <button id="updateScale" disabled>Update Scale</button>
+    </div>
   </div>
+
   <canvas id="floorPlanCanvas" width="800" height="600"></canvas>
+
   <div id="colorbar">
-    <h4>Signal Strength Colorbar (10 steps)</h4>
+    <h4>Signal Strength Colorbar (10 levels)</h4>
     <div style="width:300px; height:20px; margin:auto; background: linear-gradient(to right, blue, cyan, green, yellow, red);"></div>
-    <div style="display:flex; justify-content:space-between; width:300px; margin:auto;"><span id="barMinLabel">-100 dBm</span><span id="barMidLabel">-75 dBm</span><span id="barMaxLabel">-50 dBm</span></div>
+    <div style="display:flex; justify-content:space-between; width:300px; margin:auto;">
+      <span id="barMinLabel">-100 dBm</span>
+      <span id="barMidLabel">-75 dBm</span>
+      <span id="barMaxLabel">-50 dBm</span>
+    </div>
   </div>
+
   <div class="legend">
-    <div class="legend-item"><div class="legend-color" style="background-color: red;"></div>Router</div>
-    <div class="legend-item"><div class="legend-color" style="background-color: blue;"></div>Calibration Point</div>
-    <div class="legend-item"><div class="legend-color" style="border: 2px solid yellow; background-color: transparent;"></div>Wall</div>
+    <div class="legend-item">
+      <div class="legend-color" style="background-color: red;"></div>Router
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background-color: blue;"></div>Calibration Point
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="border: 2px solid yellow; background: transparent;"></div>Wall
+    </div>
   </div>
+
   <div id="instructions">
     <h3>How to Use</h3>
     <ol>
-      <li>1. Upload a floor plan image.</li>
-      <li>2. Start calibration mode and click two reference points. Enter the real distance (meters).</li>
-      <li>3. Start router placement mode and click to place routers.</li>
-      <li>4. Start boundary draw mode and draw walls (click start and end points).</li>
-      <li>5. Click "Start Simulation" to compute WiFi coverage.</li>
-      <li>6. Optionally download the CSV result file.</li>
+      <li>Upload a floor plan image.</li>
+      <li>Start calibration mode and click two reference points. Enter the actual distance (meters).</li>
+      <li>Start router placement mode and click to place routers.</li>
+      <li>Start boundary draw mode and draw walls (click start point → click end point).</li>
+      <li>Click “Start Simulation” to compute WiFi coverage.</li>
+      <li>Optionally, download the result as a CSV file.</li>
     </ol>
   </div>
+
   <script>
-    // You would paste the modified JavaScript logic here
-    // To keep this demo short, JS is not included in full here.
-    // The JS should enforce always-on boundary drawing and remove step-by-step visualisation
+    const canvas = document.getElementById('floorPlanCanvas');
+    const ctx = canvas.getContext('2d');
+    let img = new Image();
+    let scale = 1;
+    let calibPts = [];
+    let mode = 'none';
+    let routerPositions = [];
+    let autoWalls = [];
+    let manualWalls = [];
+    let tempStart = null;
+    let showWalls = true; // Always show walls by default
+    let signalStrengthData = [];
+    let simulationComplete = false;
+    let minScale = -100;
+    let maxScale = -50;
+    const gridSpacing = 10;
+
+    // WiFi model constants
+    const FSPL_CONST = 20; // Free Space Path Loss constant
+    const REFERENCE_DISTANCE = 1; // 1 meter
+    const WALL_LOSS = 20; // dB per wall
+    const TX_POWER = 20; // dBm
+    const FREQUENCY = 2.4; // GHz
+
+    // UI elements
+    const startCalBtn = document.getElementById('startCalibration');
+    const completeCalBtn = document.getElementById('completeCalibration');
+    const calInstr = document.getElementById('calibrationInstruction');
+    const startRouterBtn = document.getElementById('startRouterPlacement');
+    const completeRouterBtn = document.getElementById('completeRouterPlacement');
+    const startBoundaryBtn = document.getElementById('startBoundaryDraw');
+    const completeBoundaryBtn = document.getElementById('completeBoundaryDraw');
+    const clearBoundaryBtn = document.getElementById('clearBoundary');
+    const startSimBtn = document.getElementById('startSimulation');
+    const downloadCSVBtn = document.getElementById('downloadCSV');
+    const updateScaleBtn = document.getElementById('updateScale');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const barMinLabel = document.getElementById('barMinLabel');
+    const barMidLabel = document.getElementById('barMidLabel');
+    const barMaxLabel = document.getElementById('barMaxLabel');
+
+    // Load floor plan image
+    document.getElementById('floorPlanInput').addEventListener('change', e => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          detectAutoWalls();
+          draw();
+          enableInitial();
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    });
+
+    // Reset all data
+    function resetData() {
+      calibPts = [];
+      routerPositions = [];
+      manualWalls = [];
+      signalStrengthData = [];
+      simulationComplete = false;
+
+      progressBar.style.width = '0%';
+      progressText.textContent = 'Progress: 0%';
+      downloadCSVBtn.disabled = true;
+      updateScaleBtn.disabled = true;
+      clearBoundaryBtn.style.display = 'none';
+      completeCalBtn.style.display = 'none';
+      completeRouterBtn.style.display = 'none';
+      completeBoundaryBtn.style.display = 'none';
+      calInstr.textContent = 'Not in calibration mode.';
+
+      detectAutoWalls();
+      draw();
+    }
+
+    document.getElementById('resetDataBtn').addEventListener('click', () => {
+      if (confirm('Are you sure you want to reset all data?')) {
+        resetData();
+      }
+    });
+
+    function enableInitial() {
+      startCalBtn.disabled = false;
+      startRouterBtn.disabled = false;
+      startBoundaryBtn.disabled = false;
+      startSimBtn.disabled = false;
+    }
+
+    function detectAutoWalls() {
+      autoWalls = [
+        { start: {x: 0, y: 0}, end: {x: canvas.width, y: 0} },
+        { start: {x: 0, y: canvas.height}, end: {x: canvas.width, y: canvas.height} },
+        { start: {x: 0, y: 0}, end: {x: 0, y: canvas.height} },
+        { start: {x: canvas.width, y: 0}, end: {x: canvas.width, y: canvas.height} }
+      ];
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (simulationComplete && signalStrengthData.length > 0) {
+        drawHeatmap();
+      } else {
+        ctx.drawImage(img, 0, 0);
+      }
+
+      // Always draw walls
+      const allWalls = autoWalls.concat(manualWalls);
+      allWalls.forEach(seg => {
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = 'yellow';
+        ctx.lineWidth = 2;
+        ctx.moveTo(seg.start.x, seg.start.y);
+        ctx.lineTo(seg.end.x, seg.end.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // Draw routers
+      routerPositions.forEach(r => {
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+      });
+
+      // Draw calibration points
+      if (mode === 'calibration') {
+        calibPts.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+          ctx.fillStyle = 'blue';
+          ctx.fill();
+        });
+      }
+
+      // Drawing boundary in progress
+      if (mode === 'boundary' && tempStart) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth = 2;
+        ctx.moveTo(tempStart.x, tempStart.y);
+        ctx.lineTo(lastMouse.x, lastMouse.y);
+        ctx.stroke();
+      }
+    }
+
+    let lastMouse = {x: 0, y: 0};
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect();
+      lastMouse = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+      if (mode === 'boundary') draw();
+    });
+
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+
+      if (mode === 'calibration') {
+        if (calibPts.length < 2) {
+          calibPts.push({x, y});
+          draw();
+        }
+      } else if (mode === 'router') {
+        routerPositions.push({x, y});
+        draw();
+      } else if (mode === 'boundary') {
+        if (!tempStart) {
+          tempStart = {x, y};
+          clearBoundaryBtn.style.display = 'none';
+        } else {
+          manualWalls.push({start: tempStart, end: {x, y}});
+          tempStart = null;
+          clearBoundaryBtn.style.display = 'inline';
+          draw();
+        }
+      }
+    });
+
+    // Calibration
+    startCalBtn.addEventListener('click', () => {
+      mode = 'calibration';
+      calibPts = [];
+      calInstr.textContent = 'Click two points then click Complete Calibration';
+      completeCalBtn.style.display = 'inline';
+      startCalBtn.disabled = true;
+      startRouterBtn.disabled = true;
+      startSimBtn.disabled = true;
+    });
+
+    completeCalBtn.addEventListener('click', () => {
+      if (calibPts.length < 2) {
+        alert('Please select two points.');
+        return;
+      }
+      const dx = calibPts[0].x - calibPts[1].x;
+      const dy = calibPts[0].y - calibPts[1].y;
+      const dpx = Math.hypot(dx, dy);
+      const real = prompt('Enter actual distance (meters):');
+      const realNum = parseFloat(real);
+      if (isNaN(realNum) || realNum <= 0) {
+        alert('Please enter a valid distance.');
+        return;
+      }
+      scale = realNum / dpx;
+      alert(`Calibration done: 1px = ${scale.toFixed(3)} m`);
+      mode = 'none';
+      completeCalBtn.style.display = 'none';
+      calInstr.textContent = 'Not in calibration mode.';
+      startCalBtn.disabled = false;
+      startRouterBtn.disabled = false;
+      startSimBtn.disabled = false;
+      draw();
+    });
+
+    // Router placement
+    startRouterBtn.addEventListener('click', () => {
+      mode = 'router';
+      routerPositions = [];
+      completeRouterBtn.style.display = 'inline';
+      startCalBtn.disabled = true;
+      startRouterBtn.disabled = true;
+      startSimBtn.disabled = true;
+    });
+
+    completeRouterBtn.addEventListener('click', () => {
+      mode = 'none';
+      completeRouterBtn.style.display = 'none';
+      startCalBtn.disabled = false;
+      startRouterBtn.disabled = false;
+      startSimBtn.disabled = false;
+      draw();
+    });
+
+    // Boundary drawing
+    startBoundaryBtn.addEventListener('click', () => {
+      mode = 'boundary';
+      if (manualWalls.length > 0) {
+        if (!confirm('Clear existing boundaries and redraw?')) {
+          return;
+        }
+      }
+      manualWalls = [];
+      tempStart = null;
+      completeBoundaryBtn.style.display = 'inline';
+      startCalBtn.disabled = true;
+      startRouterBtn.disabled = true;
+      startBoundaryBtn.disabled = true;
+      startSimBtn.disabled = true;
+      clearBoundaryBtn.style.display = 'none';
+    });
+
+    completeBoundaryBtn.addEventListener('click', () => {
+      mode = 'none';
+      tempStart = null;
+      completeBoundaryBtn.style.display = 'none';
+      clearBoundaryBtn.style.display = 'none';
+      startCalBtn.disabled = false;
+      startRouterBtn.disabled = false;
+      startBoundaryBtn.disabled = false;
+      startSimBtn.disabled = false;
+      draw();
+    });
+
+    clearBoundaryBtn.addEventListener('click', () => {
+      if (manualWalls.length > 0) {
+        manualWalls.pop();
+        draw();
+      }
+      if (manualWalls.length === 0) {
+        clearBoundaryBtn.style.display = 'none';
+      }
+    });
+
+    // Check if two line segments intersect
+    function linesIntersect(line1, line2) {
+      const x1 = line1.start.x, y1 = line1.start.y;
+      const x2 = line1.end.x, y2 = line1.end.y;
+      const x3 = line2.start.x, y3 = line2.start.y;
+      const x4 = line2.end.x, y4 = line2.end.y;
+      const den = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+      if (den === 0) return false;
+      const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / den;
+      const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / den;
+      return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
+    }
+
+    // Count how many walls between two points
+    function countWallIntersections(p1, p2) {
+      const line = { start: p1, end: p2 };
+      const allWalls = autoWalls.concat(manualWalls);
+      let count = 0;
+      for (let wall of allWalls) {
+        if (linesIntersect(line, wall)) count++;
+      }
+      return count;
+    }
+
+    // Compute signal strength at a point from one router
+    function calculateSignalStrength(point, router) {
+      const pixelDist = Math.hypot(point.x - router.x, point.y - router.y);
+      const distance = pixelDist * scale;
+      let signalStrength = TX_POWER - (FSPL_CONST * Math.log10(distance / REFERENCE_DISTANCE) + 20 * Math.log10(FREQUENCY));
+      const wallsCount = countWallIntersections(point, router);
+      signalStrength -= wallsCount * WALL_LOSS;
+      return signalStrength;
+    }
+
+    // Combine signals from all routers
+    function combinedSignalStrength(point) {
+      if (routerPositions.length === 0) return -100;
+      let totalPower_mW = 0;
+      for (let router of routerPositions) {
+        const dBm = calculateSignalStrength(point, router);
+        const mW = Math.pow(10, dBm / 10);
+        totalPower_mW += mW;
+      }
+      return 10 * Math.log10(totalPower_mW);
+    }
+
+    function getColorFromSignal(signal) {
+      const normalized = (signal - minScale) / (maxScale - minScale);
+      const clamped = Math.max(0, Math.min(normalized, 1));
+      let r, g, b;
+      if (clamped < 0.25) {
+        const t = clamped * 4;
+        r = 0; g = Math.floor(t * 255); b = 255;
+      } else if (clamped < 0.5) {
+        const t = (clamped - 0.25) * 4;
+        r = 0; g = 255; b = Math.floor(255 * (1 - t));
+      } else if (clamped < 0.75) {
+        const t = (clamped - 0.5) * 4;
+        r = Math.floor(t * 255); g = 255; b = 0;
+      } else {
+        const t = (clamped - 0.75) * 4;
+        r = 255; g = Math.floor(255 * (1 - t)); b = 0;
+      }
+      return `rgba(${r},${g},${b},0.7)`;
+    }
+
+    function drawHeatmap() {
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(img, 0, 0);
+      ctx.globalAlpha = 1.0;
+      for (let data of signalStrengthData) {
+        ctx.fillStyle = getColorFromSignal(data.signal);
+        ctx.fillRect(data.x, data.y, gridSpacing, gridSpacing);
+      }
+    }
+
+    startSimBtn.addEventListener('click', () => {
+      if (routerPositions.length === 0) {
+        alert('Please place at least one router.');
+        return;
+      }
+      startCalBtn.disabled = true;
+      startRouterBtn.disabled = true;
+      startBoundaryBtn.disabled = true;
+      startSimBtn.disabled = true;
+      signalStrengthData = [];
+      simulationComplete = false;
+      const numX = Math.ceil(canvas.width / gridSpacing);
+      const numY = Math.ceil(canvas.height / gridSpacing);
+      const totalPoints = numX * numY;
+      let processed = 0;
+      progressBar.style.width = '0%';
+      progressText.textContent = 'Progress: 0%';
+
+      function processBatch(sx, sy, batchSize) {
+        let count = 0;
+        let x = sx, y = sy;
+        while (count < batchSize && processed < totalPoints) {
+          const pt = { x: x * gridSpacing, y: y * gridSpacing };
+          const sig = combinedSignalStrength(pt);
+          signalStrengthData.push({ x: pt.x, y: pt.y, signal: sig });
+          count++;
+          processed++;
+          const pct = Math.floor((processed / totalPoints) * 100);
+          progressBar.style.width = pct + '%';
+          progressText.textContent = `Progress: ${pct}%`;
+          x++;
+          if (x >= numX) { x = 0; y++; }
+        }
+        if (processed < totalPoints) {
+          setTimeout(() => processBatch(x, y, batchSize), 0);
+        } else {
+          simulationComplete = true;
+          startCalBtn.disabled = false;
+          startRouterBtn.disabled = false;
+          startBoundaryBtn.disabled = false;
+          startSimBtn.disabled = false;
+          downloadCSVBtn.disabled = false;
+          updateScaleBtn.disabled = false;
+          draw();
+        }
+      }
+      processBatch(0, 0, 100);
+    });
+
+    updateScaleBtn.addEventListener('click', () => {
+      const newMin = parseFloat(document.getElementById('scaleMin').value);
+      const newMax = parseFloat(document.getElementById('scaleMax').value);
+      if (isNaN(newMin) || isNaN(newMax) || newMin >= newMax) {
+        alert('Enter valid scale values.');
+        return;
+      }
+      minScale = newMin;
+      maxScale = newMax;
+      barMinLabel.textContent = `${minScale} dBm`;
+      barMidLabel.textContent = `${((minScale + maxScale) / 2).toFixed(0)} dBm`;
+      barMaxLabel.textContent = `${maxScale} dBm`;
+      if (simulationComplete) draw();
+    });
+
+    downloadCSVBtn.addEventListener('click', () => {
+      if (!simulationComplete || signalStrengthData.length === 0) {
+        alert('Run simulation first.');
+        return;
+      }
+      let csv = 'X,Y,Signal_dBm\n';
+      signalStrengthData.forEach(d => {
+        csv += `${d.x},${d.y},${d.signal.toFixed(2)}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'wifi_signal_data.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    barMinLabel.textContent = `${minScale} dBm`;
+    barMidLabel.textContent = `${((minScale + maxScale) / 2).toFixed(0)} dBm`;
+    barMaxLabel.textContent = `${maxScale} dBm`;
+
+    canvas.addEventListener('click', e => {
+      if (!simulationComplete) return;
+      const rect = canvas.getBoundingClientRect();
+      const clickedX = Math.floor((e.clientX - rect.left) / gridSpacing) * gridSpacing;
+      const clickedY = Math.floor((e.clientY - rect.top) / gridSpacing) * gridSpacing;
+      const datum = signalStrengthData.find(d => d.x === clickedX && d.y === clickedY);
+      if (!datum) return;
+      draw();
+      const cx = clickedX + gridSpacing / 2;
+      const cy = clickedY + gridSpacing / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, gridSpacing, 0, 2 * Math.PI);
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = 'black';
+      ctx.font = '12px Arial';
+      ctx.fillText(`${datum.signal.toFixed(2)} dBm`, cx + 5, cy - 5);
+    });
   </script>
 </body>
 </html>
