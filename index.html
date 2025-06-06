@@ -102,6 +102,10 @@
     <button id="downloadCSV" disabled>Download CSV</button>
 
     <div>
+      <label>Signal Source Power (dBm):</label>
+      <input type="number" id="txPower" value="20" style="width:60px;">
+    </div>
+    <div>
       <label>Wall Attenuation (dB per wall):</label>
       <input type="number" id="wallLoss" value="20" style="width:60px;">
     </div>
@@ -172,31 +176,31 @@
     let maxScale = -50;
     const gridSpacing = 10;
 
-    // WiFi 모델 상수 (정의되지 않던 부분 수정)
+    // WiFi 모델 상수 (이제 TX_POWER는 입력 필드에서 가져옴)
     const FSPL_CONST = 20;          // Free Space Path Loss constant
     const REFERENCE_DISTANCE = 1;   // 1 meter 기준
-    const TX_POWER = 20;            // dBm, 공유기 송신 출력
     const FREQUENCY = 2.4;          // GHz
 
     // UI 요소
-    const startCalBtn       = document.getElementById('startCalibration');
-    const completeCalBtn    = document.getElementById('completeCalibration');
-    const calInstr          = document.getElementById('calibrationInstruction');
-    const startRouterBtn    = document.getElementById('startRouterPlacement');
-    const completeRouterBtn = document.getElementById('completeRouterPlacement');
-    const startBoundaryBtn  = document.getElementById('startBoundaryDraw');
-    const completeBoundaryBtn = document.getElementById('completeBoundaryDraw');
-    const clearBoundaryBtn  = document.getElementById('clearBoundary');
-    const resetDataBtn      = document.getElementById('resetDataBtn');
-    const startSimBtn       = document.getElementById('startSimulation');
-    const downloadCSVBtn    = document.getElementById('downloadCSV');
-    const updateScaleBtn    = document.getElementById('updateScale');
-    const wallLossInput     = document.getElementById('wallLoss');
-    const progressBar       = document.getElementById('progressBar');
-    const progressText      = document.getElementById('progressText');
-    const barMinLabel       = document.getElementById('barMinLabel');
-    const barMidLabel       = document.getElementById('barMidLabel');
-    const barMaxLabel       = document.getElementById('barMaxLabel');
+    const startCalBtn        = document.getElementById('startCalibration');
+    const completeCalBtn     = document.getElementById('completeCalibration');
+    const calInstr           = document.getElementById('calibrationInstruction');
+    const startRouterBtn     = document.getElementById('startRouterPlacement');
+    const completeRouterBtn  = document.getElementById('completeRouterPlacement');
+    const startBoundaryBtn   = document.getElementById('startBoundaryDraw');
+    const completeBoundaryBtn= document.getElementById('completeBoundaryDraw');
+    const clearBoundaryBtn   = document.getElementById('clearBoundary');
+    const resetDataBtn       = document.getElementById('resetDataBtn');
+    const startSimBtn        = document.getElementById('startSimulation');
+    const downloadCSVBtn     = document.getElementById('downloadCSV');
+    const updateScaleBtn     = document.getElementById('updateScale');
+    const wallLossInput      = document.getElementById('wallLoss');
+    const txPowerInput       = document.getElementById('txPower');
+    const progressBar        = document.getElementById('progressBar');
+    const progressText       = document.getElementById('progressText');
+    const barMinLabel        = document.getElementById('barMinLabel');
+    const barMidLabel        = document.getElementById('barMidLabel');
+    const barMaxLabel        = document.getElementById('barMaxLabel');
 
     // ======================
     // 1) 바탕 이미지 업로드
@@ -490,6 +494,7 @@
       const pixelDist = Math.hypot(point.x - router.x, point.y - router.y);
       const distance = pixelDist * scale;
       const wallLoss = parseFloat(wallLossInput.value) || 0;
+      const TX_POWER = parseFloat(txPowerInput.value) || 0;  // 입력 필드에서 읽어옴
       let signalStrength = TX_POWER 
         - (FSPL_CONST * Math.log10(distance / REFERENCE_DISTANCE) 
         + 20 * Math.log10(FREQUENCY));
